@@ -120,6 +120,8 @@ local container happened to return the expected order; GitHub's mounted Linux wo
 returned the same two names in reverse order. The assertion now sorts the discovered
 names before enforcing the exact allowlist. This changes no application behavior or
 architecture boundary; it makes the boundary test deterministic across supported hosts.
+GitHub Actions run `42326336055` then passed both the pinned Debian Python qualification
+and the pinned Debian Node browser-runtime gate on commit `37ae8cf`.
 
 Novice/browser stabilization corrections in progress (2026-11-06): the isolated
 R18 journey verified direct page activation, profile creation/deletion, ordered
