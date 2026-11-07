@@ -97,6 +97,13 @@ therefore real controller boot, browser trust and authorized network acceptance 
 required separately on both Ranges. This record does not claim either Range is
 installed or accepted, that the package is mission-ready, or that it is on `main`.
 
+R26 final independent quality gate: **CLEAR — DOCUMENTED DEVIATION**
+(2026-11-06). The reviewer independently verified the sealed ZIP, all 55 sealed
+manifest entries, exact image identities, two-piece reconstruction, repeat join and
+conflicting-output refusal, and confirmed that this roadmap preserves the real-host
+limits. R26 is cleared as a fresh-install-only transfer candidate. Actual controller
+boot, browser trust and acceptance remain required independently for each Range.
+
 Complete novice workflow requalification in progress (2026-11-06): exercise every
 visible NCT workspace, guide and supported mutation against an exact isolated Linux
 candidate, including scheduled scans, duplicate evidence, malformed imports,
