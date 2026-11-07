@@ -7819,6 +7819,15 @@ def emergency_stop_and_clear_scan_queue(
     timeout: float = 10.0,
 ) -> dict:
     """Stop live scan contact, cancel waiting work, and release scanner capacity."""
+    with connect_database(db_path) as db:
+        emergency_candidate_run_ids = [
+            row[0]
+            for row in db.execute(
+                """SELECT run_id FROM scan_runs
+                     WHERE status IN ('queued','dispatching','running','awaiting_fallback_approval')
+                     ORDER BY rowid"""
+            ).fetchall()
+        ]
     stopped_scans = stop_scan_workers(timeout=timeout)
     stopped_batches = stop_schedule_batch_workers(timeout=min(2.0, timeout))
     if not stopped_batches or not stopped_scans:
@@ -7885,6 +7894,37 @@ def emergency_stop_and_clear_scan_queue(
                 )
                 cancelled_run_ids.append(manifest["run_id"])
 
+            explicitly_cancelled = set(cancelled_run_ids)
+            for run_id in emergency_candidate_run_ids:
+                row = db.execute(
+                    "SELECT status,manifest_json FROM scan_runs WHERE run_id=?",
+                    (run_id,),
+                ).fetchone()
+                if row is None or row[0] != "cancelled" or run_id in explicitly_cancelled:
+                    continue
+                manifest = json.loads(row[1])
+                manifest["execution_note"] = (
+                    "Emergency Stop & Clear cancelled this active or waiting scan"
+                )
+                db.execute(
+                    "UPDATE scan_runs SET manifest_json=? WHERE run_id=?",
+                    (json.dumps(manifest, sort_keys=True), run_id),
+                )
+                sync_scan_history_manifest(db, manifest)
+                append_scan_audit_on_connection(
+                    db,
+                    run_id=run_id,
+                    event="emergency_cancelled",
+                    actor=actor,
+                    details=(
+                        "The active worker acknowledged Emergency Stop & Clear before "
+                        "the queue transaction; completed evidence and saved settings "
+                        "were not deleted"
+                    ),
+                    changed_at=changed_at,
+                )
+                cancelled_run_ids.append(run_id)
+
             scheduled = emergency_cancel_open_occurrences_on_connection(
                 db,
                 actor=actor,
@@ -7949,6 +7989,13 @@ def emergency_stop_and_clear_scan_queue(
     finally:
         resume_scan_workers()
 
+    cancelled_set = set(cancelled_run_ids)
+    cancelled_run_ids = [
+        run_id for run_id in emergency_candidate_run_ids if run_id in cancelled_set
+    ] + [
+        run_id for run_id in cancelled_run_ids
+        if run_id not in emergency_candidate_run_ids
+    ]
     return {
         "stopped": True,
         "schedule_batches_stopped": stopped_batches,
@@ -9077,7 +9124,7 @@ def scan_interfaces() -> dict:
 
 @router.get("/scan-runs")
 def scan_run_history(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]:
-    return list_scan_run_plans(limit=limit)
+    return list_scan_run_plans(DB_PATH, limit=limit)
 
 
 SCAN_HISTORY_FIELDS = {

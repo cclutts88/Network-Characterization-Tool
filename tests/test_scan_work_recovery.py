@@ -745,6 +745,47 @@ def test_emergency_stop_clear_cancels_waiting_scans_and_releases_capacity(
     assert audit == ("emergency_cancelled", "admin")
 
 
+def test_emergency_stop_clear_counts_active_worker_cancellation_and_waiting_run(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    data_dir, db_path = ready_database(tmp_path)
+    active_id = "1" * 32
+    waiting_id = "2" * 32
+    add_run(db_path, active_id, "running", started=True)
+    add_run(db_path, waiting_id, "queued")
+
+    def stop_active_worker(timeout: float) -> bool:
+        with connect_database(db_path) as db:
+            manifest = json.loads(db.execute(
+                "SELECT manifest_json FROM scan_runs WHERE run_id=?", (active_id,)
+            ).fetchone()[0])
+            manifest.update({"status": "cancelled", "execution_note": "Scan cancelled"})
+            db.execute(
+                "UPDATE scan_runs SET status='cancelled', manifest_json=? WHERE run_id=?",
+                (json.dumps(manifest, sort_keys=True), active_id),
+            )
+        return True
+
+    monkeypatch.setattr(poc, "stop_scan_workers", stop_active_worker)
+    monkeypatch.setattr(poc, "stop_schedule_batch_workers", lambda timeout: True)
+
+    result = poc.emergency_stop_and_clear_scan_queue(
+        actor="admin", db_path=db_path, data_dir=data_dir
+    )
+
+    assert result["cancelled_count"] == 2
+    assert result["cancelled_run_ids"] == [active_id, waiting_id]
+    assert poc.get_scan_run_plan(active_id, db_path)["execution_note"].startswith(
+        "Emergency Stop & Clear"
+    )
+    with connect_database(db_path) as db:
+        active_audit = db.execute(
+            "SELECT event FROM scan_run_audit WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
+            (active_id,),
+        ).fetchone()
+    assert active_audit == ("emergency_cancelled",)
+
+
 def test_emergency_stop_clear_releases_only_scan_recovery_pause(
     tmp_path: Path,
 ) -> None:

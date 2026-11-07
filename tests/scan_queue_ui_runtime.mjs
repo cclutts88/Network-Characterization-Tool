@@ -82,6 +82,35 @@ await eval(`(() => {
 })()`);
 
 await eval(`(async () => {
+  const controls=new Map([
+    ['confirmEmergencyStopClear',{disabled:false}],
+    ['emergencyStopClear',{disabled:false}],
+    ['emergencyStopClearStatus',{textContent:'',className:''}],
+    ['emergencyAdminUsername',{value:''}],
+    ['emergencyAdminPassword',{value:''}],
+  ]);
+  const $=id=>controls.get(id);
+  let resolveRequest,stopped=0,recoveryLoads=0,queueLoads=0;
+  const fetch=()=>new Promise(resolve=>{resolveRequest=resolve});
+  const stopActiveScanMonitoring=()=>{stopped+=1};
+  const loadScanRecovery=async()=>{recoveryLoads+=1};
+  const loadQueue=async()=>{queueLoads+=1};
+  const emergencyErrorMessage=detail=>String(detail||'failed');
+  ${handler("submitEmergencyStopClear")}
+  const pending=submitEmergencyStopClear({preventDefault(){}});
+  assert.equal(stopped,1,'Emergency submission must stop ordinary active polling immediately');
+  assert.equal($('confirmEmergencyStopClear').disabled,true);
+  assert.equal($('emergencyStopClear').disabled,true);
+  resolveRequest({ok:true,json:async()=>({cancelled_count:2,paused_schedule_count:1,scan_contact_ready:true})});
+  await pending;
+  assert.equal(recoveryLoads,1);
+  assert.equal(queueLoads,1);
+  assert.equal($('confirmEmergencyStopClear').disabled,false);
+  assert.equal($('emergencyStopClear').disabled,false);
+  assert.match($('emergencyStopClearStatus').textContent,/cancelled 2 active or waiting scans/i);
+})()`);
+
+await eval(`(async () => {
   let queueLoadRevision=0,queueTimer=null,queueAssignmentConflictHold=false,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
   const esc=value=>String(value??'');
   let resolveFetch,openedDuringFetch=false,renderedItem=null;

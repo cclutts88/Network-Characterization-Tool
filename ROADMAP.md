@@ -43,6 +43,34 @@ the backend observer checks for errors, stale ownership, hidden polling and dupl
 requests. Do not package the candidate until the novice and independent reviewer clear
 the repaired flow and the complete Linux regression suite passes again.
 
+R23 fresh-install repetition found and corrected one first-run setup state loss
+(2026-11-06): after an operator selected a newly created scope and saved the first
+No-Strike exclusion, the panel refresh cleared that valid selection before the first
+Mission Environment review was recorded. New Scan therefore remained blocked until
+the operator selected the same scope again. Mission Environment now preserves the
+visible unrecorded selection across No-Strike refreshes when that scope still exists;
+a recorded review remains authoritative. Repeat this exact first-run sequence in the
+rebuilt candidate before release.
+
+The focused Mission Environment regression also exposed a test-isolation gap
+(2026-11-06): its helper redirected the application database but the mounted scan
+history route silently used the function-definition default database. Earlier
+full-suite activity could therefore mask the mistake. The route now passes its active
+database explicitly, and the helper binds both application and scan-router surfaces to
+the same isolated database, so this focused test proves the intended clean-install
+contract independently.
+
+R23 Emergency Stop repetition found and corrected a receipt race and two related
+display hazards (2026-11-06): stopping the active worker could publish its cancelled
+state before the Emergency transaction counted open rows, so two cancelled scans were
+reported as one even though both were safely terminal. NCT now snapshots the affected
+run set, verifies the stopped worker's terminal cancellation, records the Emergency
+audit on that run, and reports the complete unique count. Ordinary active and queue
+polling is stopped while the Emergency request runs, so the page does not falsely
+flash Idle before the receipt returns. The Emergency action stays above expanding
+self-check details so running the check cannot move the button away from an immediate
+click.
+
 Novice/browser stabilization corrections in progress (2026-11-06): the isolated
 R18 journey verified direct page activation, profile creation/deletion, ordered
 multi-network schedules, scheduled restart handoff, fallback approve and decline,

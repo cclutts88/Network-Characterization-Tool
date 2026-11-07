@@ -4,7 +4,11 @@ from fastapi.testclient import TestClient
 
 def local_client(tmp_path, monkeypatch):
     import app.main as main
-    monkeypatch.setattr(main, "DB_PATH", tmp_path / "analyzer.db")
+    import app.poc as poc
+
+    db_path = tmp_path / "analyzer.db"
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+    monkeypatch.setattr(poc, "DB_PATH", db_path)
     monkeypatch.setattr(main, "auth_enabled", lambda: False)
     return TestClient(main.app)
 

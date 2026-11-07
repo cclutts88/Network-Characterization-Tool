@@ -1102,6 +1102,27 @@ def test_mission_environment_unifies_safety_tools_and_network_level_visibility()
     assert "Roles without a reliable generic signal remain declaration-only" in SHELL_SCRIPT
 
 
+def test_mission_environment_preserves_unrecorded_scope_during_no_strike_refresh():
+    from app.mission_environment_ui import mission_environment_page
+
+    html = mission_environment_page().body.decode()
+    assert "priorSelectedScope=scopeSelect.value" in html
+    assert "item.scope_id===priorSelectedScope" in html
+
+
+def test_emergency_actions_do_not_shift_or_render_false_idle_during_stop():
+    html = operator_page().body.decode()
+
+    assert html.index('id="emergencyStopClear"') < html.index('id="scanRecoveryDetails"')
+    emergency = html.split("async function submitEmergencyStopClear", 1)[1].split(
+        "async function cancelQueuedRun", 1
+    )[0]
+    assert "trigger.disabled=true" in emergency
+    assert "stopActiveScanMonitoring()" in emergency
+    assert "await loadScanRecovery(true)" in emergency
+    assert "trigger.disabled=false;await loadQueue()" in emergency
+
+
 def test_cross_task_actions_reveal_their_destination_in_the_new_shell():
     scan_html = operator_page().body.decode()
     device_html = device_config_page().body.decode()
