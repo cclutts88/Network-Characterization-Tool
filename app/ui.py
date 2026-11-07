@@ -213,9 +213,9 @@ def operator_page() -> HTMLResponse:
         </div>
       </section>
       <section id="liveDiscoveriesPanel" class="panel live-discoveries-panel" aria-live="polite">
-        <div class="live-discoveries-heading"><div><h2>Live discoveries</h2><p id="liveDiscoveriesGuide" class="hint" data-guide-context tabindex="0">Provisional host and port observations. Evidence from a completed protocol phase can be retained even when the remaining scan is stopped.</p></div><span id="liveDiscoveriesState" class="pill completed">Idle</span></div>
-        <div id="liveDiscoveriesSummary" class="meta live-discoveries-summary">No scan is active. Nothing is waiting in the scan queue.</div>
-        <div id="liveDiscoveriesScroll" class="live-discoveries-scroll"><div id="liveDiscoveriesBody" class="meta live-discoveries-empty">Start a scan to see provisional discoveries here. Completed runs are in Scan History.</div></div>
+        <div class="live-discoveries-heading"><div><h2>Live discoveries</h2><p id="liveDiscoveriesGuide" class="hint" data-guide-context tabindex="0">Provisional host and port observations. Evidence from a completed protocol phase can be retained even when the remaining scan is stopped.</p></div><span id="liveDiscoveriesState" class="pill dispatching">Checking</span></div>
+        <div id="liveDiscoveriesSummary" class="meta live-discoveries-summary">Checking the analyzer and scan queue…</div>
+        <div id="liveDiscoveriesScroll" class="live-discoveries-scroll"><div id="liveDiscoveriesBody" class="meta live-discoveries-empty">Loading the current scan state. Completed runs are in Scan History.</div></div>
       </section>
       <section id="profileBehaviorPanel" class="panel">
         <h2>Profile behavior</h2>

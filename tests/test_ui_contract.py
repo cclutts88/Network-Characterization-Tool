@@ -152,7 +152,9 @@ def test_active_scan_has_a_bounded_provisional_discovery_workspace():
     html = operator_page().body.decode()
 
     assert 'id="liveDiscoveriesPanel"' in html
-    assert 'id="liveDiscoveriesState" class="pill completed">Idle</span>' in html
+    assert 'id="liveDiscoveriesState" class="pill dispatching">Checking</span>' in html
+    assert "Checking the analyzer and scan queue" in html
+    assert "Loading the current scan state" in html
     assert "No scan is active. Nothing is waiting in the scan queue." in html
     assert "Completed runs are in Scan History." in html
     assert "Live discoveries" in html

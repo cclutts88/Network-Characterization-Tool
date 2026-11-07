@@ -71,6 +71,18 @@ flash Idle before the receipt returns. The Emergency action stays above expandin
 self-check details so running the check cannot move the button away from an immediate
 click.
 
+R24 corrected-flow repetition passed the first-run and Emergency contracts
+(2026-11-06): saving the first No-Strike exclusion preserved the operator's selected
+scope and the first Mission Environment review completed without re-selection.
+Emergency Stop & Clear cancelled and audited both the active and waiting runs, reported
+both cancellations, left no queued work, and allowed a new scan to start. The repeat
+found one remaining presentation-only race: before the first active and queue reads
+returned, Live discoveries briefly rendered its static Idle state while the neighboring
+panels correctly said they were loading. Its initial state now says Checking until the
+same scan-state read proves Idle, Queued, Starting or Active. This does not change scan
+execution or retained evidence, but prevents an operator from seeing contradictory
+startup status.
+
 Novice/browser stabilization corrections in progress (2026-11-06): the isolated
 R18 journey verified direct page activation, profile creation/deletion, ordered
 multi-network schedules, scheduled restart handoff, fallback approve and decline,
