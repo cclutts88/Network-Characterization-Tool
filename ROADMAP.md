@@ -133,7 +133,13 @@ idempotent recovery and isolation of one invalid collection. The complete Debian
 Python 3.12 suite passes 2,757 checks with 25 intentional skips and the existing
 Starlette dependency warning; all 24 Debian Node 22 browser-runtime scripts pass.
 Independent review returned **CLEAR — DOCUMENTED DEVIATION** because exact-image
-repetition remains required before this correction is a release candidate.
+repetition remained required before this correction could become a release candidate.
+Exact image `0.16.0-range-test-20261106-stability-r23` reports commit `08a2847`,
+starts cleanly with isolated fresh data, returns healthy build identity, and opens the
+built-in operator documentation. Twenty parser-contract, retired-evidence, invalid-
+collection isolation and operator-guide checks pass from inside that exact image. This
+qualifies the correction as development-ready; it is not deployed to the Range or
+available on `main`.
 
 Planned device-credential boundary (recorded 2026-11-06): later automatic or scheduled
 network-device collection may use administrator-approved saved credentials, but those
