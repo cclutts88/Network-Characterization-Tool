@@ -88,14 +88,15 @@ its sealed manifest is
 `35be661a383c88030e9356a022389d84b0ae42b50e41fa28b166e326c334e99c`.
 The standard transfer set contains two verified pieces of 50,331,648 and 26,545,806
 bytes. Independent reconstruction matched the sealed ZIP, a repeated join preserved
-the correct output, and a conflicting output was refused. The same sealed package is
-intended for two independent clean controllers; each installation creates separate
+the correct output, and a conflicting output was refused. The same sealed package was
+prepared for two independent clean controllers; each installation creates separate
 accounts, settings, storage, evidence and recovery state. Local acceptance substitutes
 an actual service process for real systemd boot, uses Docker port admission for the
 socket check and excludes its administrative coordinator from evidence peer checks;
 therefore real controller boot, browser trust and authorized network acceptance remain
-required separately on both Ranges. This record does not claim either Range is
-installed or accepted, that the package is mission-ready, or that it is on `main`.
+required separately on both Ranges. This local qualification record alone did not claim
+either Range was installed or accepted, that the package was mission-ready, or that it
+was on `main`; the later deployment record below supersedes only the installation claim.
 
 R26 final independent quality gate: **CLEAR — DOCUMENTED DEVIATION**
 (2026-11-06). The reviewer independently verified the sealed ZIP, all 55 sealed
@@ -109,6 +110,20 @@ for release-record commit `5de06dd4e95a24befaf2ad49e924ee56d73880b9`: Debian
 Bookworm Python qualification and Debian Bookworm Node runtime checks completed
 successfully. This remote result does not replace the two outstanding target-Range
 acceptance gates.
+
+R26 was installed fresh on two independent clean Range controllers (2026-11-06).
+Both controllers passed exact transfer/package verification and reported the expected
+build and commit with separate application and recovery state. The application and
+recovery containers were running, the recovery service was enabled and active, and
+CA-verified startup/readiness checks passed. One controller already met the supported
+interpreter prerequisite. The other retained its system Python 3.6 while approved
+offline AppStream Python 3.9 was installed side-by-side, after which the same preflight
+and fresh-install path passed. These results prove installation and service readiness;
+they do not yet prove the controller-specific trusted-browser sign-in and completed
+recovery handoff, restart persistence, short operator journey, or real host-boot
+behavior. Because both installations were fresh, retained-data Range acceptance also
+remains open. Early operator feedback on 2026-11-07 was positive and the tool was well
+received, but that feedback is not a substitute for the remaining formal acceptance.
 
 Complete novice workflow requalification in progress (2026-11-06): exercise every
 visible NCT workspace, guide and supported mutation against an exact isolated Linux
@@ -398,9 +413,11 @@ second click, and restores an unresolved attempt after navigation or reload. A l
 ambiguous response can therefore be retried byte-for-byte; only a validated receipt or
 definite pre-admission rejection releases the saved attempt. Focused tests cover
 different network names, retained order and context, idempotent replay, all-or-nothing
-rejection, double-clicks and lost-response retry. Full-suite, novice-browser and
-independent-review gates are still required before this correction is packaged or
-described as Range-ready.
+rejection, double-clicks and lost-response retry. The complete supported Linux suite,
+novice-browser gate and independent review passed, and the correction was included in
+R26 (`7be1299`). R26 is installed on both clean Range controllers. Controller-specific
+confirmation of generated schedule names remains part of final operator acceptance
+before this behavior is described as fully Range-accepted.
 
 Scan-profile deletion confirmation defect corrected in development (2026-11-06): the
 confirmation dialog was nested inside the hidden Scan History page section. The server
@@ -411,9 +428,11 @@ profile, originating task and request revision; leaving the page or starting ano
 request cancels the pending browser action, so a late response cannot surface a stale
 destructive prompt. Existing server-side expiry, exact confirmation and schedule-
 dependency checks remain authoritative. Focused contracts cover shared placement,
-immediate state and navigation cancellation. Full-suite, novice-browser and
-independent-review gates are still required before this correction is packaged or
-described as Range-ready.
+immediate state and navigation cancellation. The complete supported Linux suite,
+novice-browser gate and independent review passed, and the correction was included in
+R26. R26 is installed on both clean Range controllers. Controller-specific confirmation
+that the prompt appears immediately and cancels safely on navigation remains part of
+final operator acceptance before this behavior is described as fully Range-accepted.
 
 Device-role selection visibility correction started (2026-11-06): hands-on review of
 the locally qualified R11 candidate found that the browser's native multi-select did
