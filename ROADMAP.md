@@ -20,6 +20,39 @@ paths, novice browser review, backend observation and independent quality cleara
 An addition is not complete if any previously supported workflow becomes unreliable,
 confusing or unusable.
 
+Emergency scan-admission fence correction completed in development (2026-11-07):
+backend review found a narrow race in which Emergency Stop & Clear blocked worker
+startup but did not reject new durable manual, multi-network or scheduled work admitted
+after its cancellation transaction and before worker admission resumed. One shared
+fail-closed admission boundary now encloses the complete durable write transaction for
+single scans, scheduled chunks, ordered multi-network batches and scheduled occurrences.
+Emergency closes that boundary before identifying work to cancel and reopens it only
+after worker stop, queue/occurrence cancellation and recovery-state checks all succeed.
+An unsuccessful recovery remains blocked. Independent review halted the first revision
+because recovery-file failure could reopen admission, then halted the second because two
+overlapping administrator requests could clear each other's fence. Recovery failure now
+stays closed and the complete Emergency operation is separately serialized; deterministic
+tests prove both admission orders, no hidden rows or batch receipts, successful resume,
+failed-cleanup containment and overlapping success/failure requests. The novice wording
+review passed after the response was changed to name Emergency Stop & Clear and state
+that nothing was queued. Supported Debian Bookworm Python 3.12 qualification passed
+2,768 tests with 25 supported skips and one existing dependency warning; 103 focused
+recovery, scheduling, batch and assignment tests plus compilation passed independently.
+All 24 supported Debian Bookworm Node 22 runtime scripts completed successfully. Backend
+review is **CLEAR** and independent review is **CLEAR — DOCUMENTED DEVIATION**. This is
+development work only; it is not part of the sealed or deployed R26 package
+and still requires a later exact-package/Range operator acceptance gate.
+
+Interrupted-scan continuation planned after the stabilization freeze (2026-11-07): add
+an operator action named **Complete remaining coverage** when retained progress proves
+which hosts, protocols and ports finished before an interruption. Preserve the original
+partial evidence unchanged, create a separately accountable linked continuation run for
+only the defensible unfinished coverage, and present both records together as one
+coverage effort without pretending they were one source. When exact unfinished coverage
+cannot be proven, label it Not assessed and offer a full retry instead. Extend this only
+after current restart, cancellation and retained-data acceptance closes; do not infer
+safe resume from a percentage or the last line of Nmap output.
+
 Linux qualification environment requirement recorded (2026-11-06): all source-level
 Python qualification must run in the supported Debian Bookworm Python 3.12 container,
 and browser/runtime JavaScript checks must run in the Debian Bookworm Node 22

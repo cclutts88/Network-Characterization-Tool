@@ -103,6 +103,30 @@ def test_emergency_clear_cancels_waiting_occurrence_before_first_scan(tmp_path):
     assert review == ("admin", 1)
 
 
+def test_scheduled_occurrence_admission_is_fail_closed_during_emergency_stop(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    schedule = make_schedule(db_path)
+    poc.block_scan_admission()
+    try:
+        with pytest.raises(poc.ScanAdmissionBlocked, match="Nothing was queued"):
+            prepare_schedule_occurrence(
+                schedule["schedule_id"],
+                advance_schedule=False,
+                trigger_key="emergency-admission-test",
+                actor="analyst.one",
+                db_path=db_path,
+            )
+        with connect_database(db_path) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM scan_schedule_occurrences"
+            ).fetchone()[0] == 0
+            assert connection.execute(
+                "SELECT COUNT(*) FROM scan_schedule_chunks"
+            ).fetchone()[0] == 0
+    finally:
+        poc.resume_scan_workers()
+
+
 def test_emergency_clear_preserves_completed_chunk_and_cancels_remaining_work(tmp_path):
     db_path = tmp_path / "analyzer.db"
     schedule = make_schedule(db_path)

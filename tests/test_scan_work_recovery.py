@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import threading
 import uuid
 
 import pytest
@@ -745,6 +746,130 @@ def test_emergency_stop_clear_cancels_waiting_scans_and_releases_capacity(
     assert audit == ("emergency_cancelled", "admin")
 
 
+def test_emergency_stop_blocks_concurrent_scan_admission_until_resume(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    data_dir, db_path = ready_database(tmp_path)
+    stop_entered = threading.Event()
+    allow_stop = threading.Event()
+    results: list[dict] = []
+    errors: list[BaseException] = []
+
+    def blocked_stop(timeout: float) -> bool:
+        stop_entered.set()
+        assert allow_stop.wait(timeout=max(2.0, timeout))
+        return True
+
+    def run_emergency() -> None:
+        try:
+            results.append(poc.emergency_stop_and_clear_scan_queue(
+                actor="admin", db_path=db_path, data_dir=data_dir
+            ))
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(poc, "stop_scan_workers", blocked_stop)
+    monkeypatch.setattr(poc, "stop_schedule_batch_workers", lambda timeout: True)
+    worker = threading.Thread(target=run_emergency)
+    worker.start()
+    try:
+        assert stop_entered.wait(1)
+        assert poc._SCAN_ADMISSION_BLOCKED.is_set()
+        request = poc.ScanRunRequest(
+            operator="analyst",
+            created_by="analyst",
+            executed_by="analyst",
+            name="Concurrent emergency admission",
+            reason="Prove Emergency Stop excludes new durable work",
+            originating_host="nct-test",
+            interface="eth0",
+            profile="standard",
+            targets=["192.0.2.1"],
+            capture=True,
+        )
+        with pytest.raises(poc.ScanAdmissionBlocked, match="Nothing was queued"):
+            poc.prepare_scan_run(request, db_path=db_path, interfaces={"eth0"})
+        with connect_database(db_path) as db:
+            assert db.execute("SELECT COUNT(*) FROM scan_runs").fetchone()[0] == 0
+            assert db.execute("SELECT COUNT(*) FROM scan_run_audit").fetchone()[0] == 0
+    finally:
+        allow_stop.set()
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert results[0]["stopped"] is True
+    assert not poc._SCAN_ADMISSION_BLOCKED.is_set()
+    accepted = poc.prepare_scan_run(request, db_path=db_path, interfaces={"eth0"})
+    assert accepted["status"] == "queued"
+
+
+def test_emergency_waits_for_earlier_admission_then_cancels_that_run(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    data_dir, db_path = ready_database(tmp_path)
+    admission_entered = threading.Event()
+    allow_admission = threading.Event()
+    submit_results: list[dict] = []
+    emergency_results: list[dict] = []
+    errors: list[BaseException] = []
+    original_insert = poc._insert_reviewed_scan_run_on_connection
+
+    def blocked_insert(*args, **kwargs):
+        admission_entered.set()
+        assert allow_admission.wait(2)
+        return original_insert(*args, **kwargs)
+
+    request = poc.ScanRunRequest(
+        operator="analyst",
+        created_by="analyst",
+        executed_by="analyst",
+        name="Admission before emergency",
+        reason="Prove earlier durable admission is included in Emergency Stop",
+        originating_host="nct-test",
+        interface="eth0",
+        profile="standard",
+        targets=["192.0.2.2"],
+        capture=True,
+    )
+
+    def submit() -> None:
+        try:
+            submit_results.append(poc.prepare_scan_run(
+                request, db_path=db_path, interfaces={"eth0"}
+            ))
+        except BaseException as exc:
+            errors.append(exc)
+
+    def emergency() -> None:
+        try:
+            emergency_results.append(poc.emergency_stop_and_clear_scan_queue(
+                actor="admin", db_path=db_path, data_dir=data_dir
+            ))
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(poc, "_insert_reviewed_scan_run_on_connection", blocked_insert)
+    submit_thread = threading.Thread(target=submit)
+    submit_thread.start()
+    assert admission_entered.wait(1)
+    emergency_thread = threading.Thread(target=emergency)
+    emergency_thread.start()
+    emergency_thread.join(timeout=0.05)
+    assert emergency_thread.is_alive()
+    allow_admission.set()
+    submit_thread.join(timeout=2)
+    emergency_thread.join(timeout=2)
+
+    assert not submit_thread.is_alive()
+    assert not emergency_thread.is_alive()
+    assert errors == []
+    run_id = submit_results[0]["run_id"]
+    assert emergency_results[0]["cancelled_run_ids"] == [run_id]
+    assert poc.get_scan_run_plan(run_id, db_path)["status"] == "cancelled"
+    assert not poc._SCAN_ADMISSION_BLOCKED.is_set()
+
+
 def test_emergency_stop_clear_counts_active_worker_cancellation_and_waiting_run(
     monkeypatch, tmp_path: Path,
 ) -> None:
@@ -825,12 +950,120 @@ def test_emergency_stop_clear_refuses_to_mutate_if_every_worker_does_not_stop(
         lambda: pytest.fail("Failed shutdown must keep scan admission blocked"),
     )
 
-    with pytest.raises(RuntimeError, match="did not stop safely"):
-        poc.emergency_stop_and_clear_scan_queue(
-            actor="admin", db_path=db_path, data_dir=data_dir
-        )
+    try:
+        with pytest.raises(RuntimeError, match="did not stop safely"):
+            poc.emergency_stop_and_clear_scan_queue(
+                actor="admin", db_path=db_path, data_dir=data_dir
+            )
 
-    assert poc.get_scan_run_plan(run_id, db_path)["status"] == "queued"
+        assert poc.get_scan_run_plan(run_id, db_path)["status"] == "queued"
+        assert poc._SCAN_ADMISSION_BLOCKED.is_set()
+        with pytest.raises(poc.ScanAdmissionBlocked, match="Nothing was queued"):
+            with poc.scan_admission_guard():
+                pytest.fail("Blocked admission guard must not enter")
+    finally:
+        with poc._SCAN_ADMISSION_LOCK:
+            poc._SCAN_ADMISSION_BLOCKED.clear()
+
+
+def test_emergency_pause_failure_keeps_workers_and_admission_fail_closed(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    data_dir, db_path = ready_database(tmp_path)
+    monkeypatch.setattr(
+        poc,
+        "emergency_clear_scan_recovery_pause",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("recovery pause record unavailable")
+        ),
+    )
+
+    try:
+        with pytest.raises(OSError, match="recovery pause record unavailable"):
+            poc.emergency_stop_and_clear_scan_queue(
+                actor="admin", db_path=db_path, data_dir=data_dir
+            )
+        assert poc._SCAN_ADMISSION_BLOCKED.is_set()
+        assert poc._SCAN_WORKER_SHUTDOWN.is_set()
+        assert poc._SCHEDULE_WORKER_SHUTDOWN.is_set()
+        with pytest.raises(poc.ScanAdmissionBlocked, match="Nothing was queued"):
+            with poc.scan_admission_guard():
+                pytest.fail("Failed recovery must keep admission blocked")
+    finally:
+        poc.resume_scan_workers()
+
+
+def test_overlapping_emergency_requests_are_serialized_and_failure_stays_blocked(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    data_dir, db_path = ready_database(tmp_path)
+    first_pause_entered = threading.Event()
+    release_first_pause = threading.Event()
+    second_stop_entered = threading.Event()
+    release_second_stop = threading.Event()
+    stop_calls = 0
+    stop_calls_lock = threading.Lock()
+    results: list[dict] = []
+    errors: list[BaseException] = []
+    original_stop = poc.stop_scan_workers
+    original_clear = poc.emergency_clear_scan_recovery_pause
+
+    def staged_stop(timeout: float) -> bool:
+        nonlocal stop_calls
+        with stop_calls_lock:
+            stop_calls += 1
+            call_number = stop_calls
+        stopped = original_stop(timeout=timeout)
+        if call_number == 2:
+            second_stop_entered.set()
+            assert release_second_stop.wait(2)
+            return False
+        return stopped
+
+    def blocked_first_clear(*args, **kwargs):
+        first_pause_entered.set()
+        assert release_first_pause.wait(2)
+        return original_clear(*args, **kwargs)
+
+    def run_emergency(actor: str) -> None:
+        try:
+            results.append(poc.emergency_stop_and_clear_scan_queue(
+                actor=actor, db_path=db_path, data_dir=data_dir
+            ))
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(poc, "stop_scan_workers", staged_stop)
+    monkeypatch.setattr(poc, "emergency_clear_scan_recovery_pause", blocked_first_clear)
+    first = threading.Thread(target=run_emergency, args=("admin-one",))
+    second = threading.Thread(target=run_emergency, args=("admin-two",))
+    first.start()
+    assert first_pause_entered.wait(1)
+    second.start()
+    assert not second_stop_entered.wait(0.05)
+    assert poc._SCAN_ADMISSION_BLOCKED.is_set()
+
+    release_first_pause.set()
+    assert second_stop_entered.wait(1)
+    assert poc._SCAN_ADMISSION_BLOCKED.is_set()
+    release_second_stop.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    try:
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert len(results) == 1
+        assert len(errors) == 1
+        assert isinstance(errors[0], RuntimeError)
+        assert "kept scan admission blocked" in str(errors[0])
+        assert poc._SCAN_ADMISSION_BLOCKED.is_set()
+        assert poc._SCAN_WORKER_SHUTDOWN.is_set()
+        assert poc._SCHEDULE_WORKER_SHUTDOWN.is_set()
+    finally:
+        release_first_pause.set()
+        release_second_stop.set()
+        poc.resume_scan_workers()
 
 
 def test_emergency_stop_clear_endpoint_requires_fresh_admin_credentials(

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from app import poc
 from app.database import connect_database
 from app.collection_safety_setup import record_collection_safety_review
 from app.network_scopes import create_network_scope
@@ -143,6 +144,30 @@ def test_preview_and_atomic_submit_preserve_explicit_order_and_profile(tmp_path,
     ]
     assert len({item["profile_version"] for item in manifests}) == 1
     assert len(dispatches) == 1
+
+
+def test_batch_admission_is_atomic_and_fail_closed_during_emergency_stop(
+    tmp_path, monkeypatch,
+):
+    db_path, _networks, _request, _preview, submit = _reviewed_batch(tmp_path)
+    monkeypatch.setattr("app.poc.dispatch_next_queued_run", lambda **_kwargs: None)
+    poc.block_scan_admission()
+    try:
+        with pytest.raises(poc.ScanAdmissionBlocked, match="Nothing was queued"):
+            launch_scan_run_batch(
+                submit,
+                db_path=db_path,
+                data_dir=tmp_path / "data",
+                interfaces={"eth0"},
+            )
+        assert _run_rows(db_path) == []
+        with connect_database(db_path) as db:
+            receipts = db.execute(
+                "SELECT COUNT(*) FROM app_settings WHERE key LIKE 'scan_run_batch:v1:%'"
+            ).fetchone()[0]
+        assert receipts == 0
+    finally:
+        poc.resume_scan_workers()
 
 
 def test_unchanged_real_safety_review_survives_human_preview_delay(tmp_path, monkeypatch):

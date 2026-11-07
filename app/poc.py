@@ -20,6 +20,7 @@ import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -801,6 +802,31 @@ ACTIVE_SCHEDULE_THREADS: dict[str, threading.Thread] = {}
 ACTIVE_SCHEDULE_BATCHES_LOCK = threading.Lock()
 _SCAN_WORKER_SHUTDOWN = threading.Event()
 _SCHEDULE_WORKER_SHUTDOWN = threading.Event()
+_SCAN_ADMISSION_LOCK = threading.RLock()
+_SCAN_ADMISSION_BLOCKED = threading.Event()
+_EMERGENCY_SCAN_CLEAR_LOCK = threading.Lock()
+
+
+class ScanAdmissionBlocked(RuntimeError):
+    """Raised when durable scan work is submitted during a worker safety stop."""
+
+
+@contextmanager
+def scan_admission_guard():
+    """Hold the admission boundary through one bounded durable queue transaction."""
+    with _SCAN_ADMISSION_LOCK:
+        if _SCAN_ADMISSION_BLOCKED.is_set():
+            raise ScanAdmissionBlocked(
+                "New scans are temporarily paused while Emergency Stop & Clear is "
+                "finishing. Nothing was queued; retry after recovery completes."
+            )
+        yield
+
+
+def block_scan_admission() -> None:
+    """Close admission after all earlier guarded queue transactions have finished."""
+    with _SCAN_ADMISSION_LOCK:
+        _SCAN_ADMISSION_BLOCKED.set()
 DELETE_CHALLENGES: dict[str, tuple[str, float]] = {}
 DELETE_CHALLENGES_LOCK = threading.Lock()
 
@@ -3386,13 +3412,14 @@ def insert_reviewed_scan_run(
     """Atomically recheck reviewed context, retain the run, and snapshot context."""
     init_poc_storage(db_path)
     init_pipeline_intake_storage(db_path)
-    with connect_database(db_path) as db:
-        db.execute("BEGIN IMMEDIATE")
-        _insert_reviewed_scan_run_on_connection(
-            db, manifest, plan, audit_event=audit_event,
-            audit_details=audit_details,
-            scheduled_chunk_claim=scheduled_chunk_claim,
-        )
+    with scan_admission_guard():
+        with connect_database(db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            _insert_reviewed_scan_run_on_connection(
+                db, manifest, plan, audit_event=audit_event,
+                audit_details=audit_details,
+                scheduled_chunk_claim=scheduled_chunk_claim,
+            )
 
 
 def _assert_manifest_fences_on_connection(db, manifest: dict) -> None:
@@ -4612,71 +4639,76 @@ def launch_scan_run_batch(
     )
     actor = request.created_by or request.operator
     replayed = False
-    with connect_database(db_path) as db:
-        db.execute("BEGIN IMMEDIATE")
-        replay = _scan_batch_replay(
-            db,
-            request_token=token,
-            actor=actor,
-            request_json=request_json,
-            request_sha256=request_sha256,
-        )
-        if replay is not None:
-            result = replay
-            replayed = True
-        else:
-            batch_id = uuid.uuid4().hex
-            prepared, _profile, revision, digest = _prepare_scan_batch_on_connection(
-                db, request, db_path=db_path, batch_id=batch_id, persist=True,
-            )
-            if revision != request.expected_global_no_strike_revision:
-                raise SavedNetworkScopeConflict(
-                    "Global No-Strike changed after preview; review the batch again"
-                )
-            if not hmac.compare_digest(digest, request.preview_digest):
-                raise SavedNetworkScopeConflict(
-                    "The batch changed after preview; review it again before queueing"
-                )
-            queued_ids = [
-                str(row[0]) for row in db.execute(
-                    "SELECT run_id FROM scan_runs WHERE status = 'queued' ORDER BY rowid"
-                ).fetchall()
-            ]
-            queue_positions = {run_id: index for index, run_id in enumerate(queued_ids, start=1)}
-            accepted_at = utc_now()
-            result = {
-                "contract": "nct-scan-run-batch:1",
-                "batch_id": batch_id,
-                "request_token": token,
-                "accepted_at": accepted_at,
-                "requested_count": len(prepared),
-                "accepted_count": len(prepared),
-                "all_accepted": True,
-                "sequential_execution": True,
-                "request_replayed": False,
-                "runs": [
-                    {
-                        "selection_order": index,
-                        "run_id": manifest["run_id"],
-                        "generated_name": manifest["name"],
-                        "saved_network_id": network["saved_network_id"],
-                        "saved_network_name": network["name"],
-                        "cidr": network["cidr"],
-                        "profile_id": manifest["profile_id"],
-                        "profile_version": manifest["profile_version"],
-                        "initial_queue_position": queue_positions[manifest["run_id"]],
-                    }
-                    for index, (_plan, manifest, network) in enumerate(prepared, start=1)
-                ],
-            }
-            _record_scan_batch_receipt(
+    with scan_admission_guard():
+        with connect_database(db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            replay = _scan_batch_replay(
                 db,
                 request_token=token,
                 actor=actor,
                 request_json=request_json,
                 request_sha256=request_sha256,
-                result=result,
             )
+            if replay is not None:
+                result = replay
+                replayed = True
+            else:
+                batch_id = uuid.uuid4().hex
+                prepared, _profile, revision, digest = _prepare_scan_batch_on_connection(
+                    db, request, db_path=db_path, batch_id=batch_id, persist=True,
+                )
+                if revision != request.expected_global_no_strike_revision:
+                    raise SavedNetworkScopeConflict(
+                        "Global No-Strike changed after preview; review the batch again"
+                    )
+                if not hmac.compare_digest(digest, request.preview_digest):
+                    raise SavedNetworkScopeConflict(
+                        "The batch changed after preview; review it again before queueing"
+                    )
+                queued_ids = [
+                    str(row[0]) for row in db.execute(
+                        "SELECT run_id FROM scan_runs WHERE status = 'queued' ORDER BY rowid"
+                    ).fetchall()
+                ]
+                queue_positions = {
+                    run_id: index for index, run_id in enumerate(queued_ids, start=1)
+                }
+                accepted_at = utc_now()
+                result = {
+                    "contract": "nct-scan-run-batch:1",
+                    "batch_id": batch_id,
+                    "request_token": token,
+                    "accepted_at": accepted_at,
+                    "requested_count": len(prepared),
+                    "accepted_count": len(prepared),
+                    "all_accepted": True,
+                    "sequential_execution": True,
+                    "request_replayed": False,
+                    "runs": [
+                        {
+                            "selection_order": index,
+                            "run_id": manifest["run_id"],
+                            "generated_name": manifest["name"],
+                            "saved_network_id": network["saved_network_id"],
+                            "saved_network_name": network["name"],
+                            "cidr": network["cidr"],
+                            "profile_id": manifest["profile_id"],
+                            "profile_version": manifest["profile_version"],
+                            "initial_queue_position": queue_positions[manifest["run_id"]],
+                        }
+                        for index, (_plan, manifest, network) in enumerate(
+                            prepared, start=1
+                        )
+                    ],
+                }
+                _record_scan_batch_receipt(
+                    db,
+                    request_token=token,
+                    actor=actor,
+                    request_json=request_json,
+                    request_sha256=request_sha256,
+                    result=result,
+                )
     # A retry after commit but before dispatch still reaches this idempotent
     # dispatcher, so accepted work cannot remain stranded solely by a lost response.
     try:
@@ -6800,21 +6832,22 @@ def prepare_schedule_occurrence(
                 "The Mission Environment changed while this occurrence was prepared"
             )
 
-    occurrence = prepare_occurrence(
-        db_path,
-        schedule=schedule,
-        due_at=due["due_at"],
-        trigger_kind=trigger_kind,
-        trigger_key=trigger_key,
-        actor=actor,
-        frozen_contract=frozen,
-        chunks=chunks,
-        next_due_at=due["next_due_at"],
-        first_missed_due_at=due["first_missed_due_at"],
-        latest_missed_due_at=due["latest_missed_due_at"],
-        skipped_due_count=due["skipped_due_count"],
-        transaction_guard=recheck_external_inputs,
-    )
+    with scan_admission_guard():
+        occurrence = prepare_occurrence(
+            db_path,
+            schedule=schedule,
+            due_at=due["due_at"],
+            trigger_kind=trigger_kind,
+            trigger_key=trigger_key,
+            actor=actor,
+            frozen_contract=frozen,
+            chunks=chunks,
+            next_due_at=due["next_due_at"],
+            first_missed_due_at=due["first_missed_due_at"],
+            latest_missed_due_at=due["latest_missed_due_at"],
+            skipped_due_count=due["skipped_due_count"],
+            transaction_guard=recheck_external_inputs,
+        )
     return {
         "schedule_id": schedule_id,
         "occurrence_id": occurrence.occurrence_id,
@@ -7770,6 +7803,8 @@ def resume_scan_workers() -> None:
         _SCHEDULE_WORKER_SHUTDOWN.clear()
     with ACTIVE_RUNS_LOCK:
         _SCAN_WORKER_SHUTDOWN.clear()
+    with _SCAN_ADMISSION_LOCK:
+        _SCAN_ADMISSION_BLOCKED.clear()
 
 
 def active_scan_worker_ids() -> list[str]:
@@ -7818,7 +7853,25 @@ def emergency_stop_and_clear_scan_queue(
     data_dir: Path = DATA_DIR,
     timeout: float = 10.0,
 ) -> dict:
+    """Serialize emergency recovery so one request cannot reopen another."""
+    with _EMERGENCY_SCAN_CLEAR_LOCK:
+        return _emergency_stop_and_clear_scan_queue_locked(
+            actor=actor,
+            db_path=db_path,
+            data_dir=data_dir,
+            timeout=timeout,
+        )
+
+
+def _emergency_stop_and_clear_scan_queue_locked(
+    *,
+    actor: str,
+    db_path: Path = DB_PATH,
+    data_dir: Path = DATA_DIR,
+    timeout: float = 10.0,
+) -> dict:
     """Stop live scan contact, cancel waiting work, and release scanner capacity."""
+    block_scan_admission()
     with connect_database(db_path) as db:
         emergency_candidate_run_ids = [
             row[0]
@@ -7983,11 +8036,11 @@ def emergency_stop_and_clear_scan_queue(
             db.rollback()
             raise
 
-    try:
-        pause_released = emergency_clear_scan_recovery_pause(data_dir, actor=actor)
-        remaining_pause = recovery_pause(data_dir)
-    finally:
-        resume_scan_workers()
+    pause_released = emergency_clear_scan_recovery_pause(data_dir, actor=actor)
+    remaining_pause = recovery_pause(data_dir)
+    # Reopen durable admission only after every recovery-state check succeeds.
+    # Any exception above intentionally leaves worker and admission fences closed.
+    resume_scan_workers()
 
     cancelled_set = set(cancelled_run_ids)
     cancelled_run_ids = [

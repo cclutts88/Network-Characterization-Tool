@@ -79,6 +79,20 @@ def test_assignment_rejects_competing_and_aba_stale_requests(tmp_path):
         )
 
 
+def test_manual_scan_admission_is_fail_closed_during_emergency_stop(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    poc.init_poc_storage(db_path)
+    poc.block_scan_admission()
+    try:
+        with pytest.raises(poc.ScanAdmissionBlocked, match="Nothing was queued"):
+            poc.prepare_scan_run(_request(), db_path=db_path, interfaces={"eth0"})
+        with poc.connect_database(db_path) as db:
+            assert db.execute("SELECT COUNT(*) FROM scan_runs").fetchone()[0] == 0
+            assert db.execute("SELECT COUNT(*) FROM scan_run_audit").fetchone()[0] == 0
+    finally:
+        poc.resume_scan_workers()
+
+
 def test_assignment_and_dispatch_share_one_atomic_boundary(tmp_path):
     first_db = tmp_path / "assignment-first.db"
     _accounts(first_db)
