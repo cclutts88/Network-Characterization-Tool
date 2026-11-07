@@ -83,6 +83,24 @@ same scan-state read proves Idle, Queued, Starting or Active. This does not chan
 execution or retained evidence, but prevents an operator from seeing contradictory
 startup status.
 
+R25 stability candidate completed local qualification (2026-11-06): exact image
+`0.16.0-range-test-20261106-stability-r25` reports commit `65a2afd`. The complete
+supported Debian Bookworm Python 3.12 suite passes 2,760 checks with 25 intentional
+skips and the existing Starlette dependency warning; all 24 Debian Bookworm Node 22
+browser-runtime scripts pass. Two hundred and two focused queue, scheduler, Mission
+Environment and UI checks also pass from inside the exact image. The novice repeated
+the final Active Scans load five times: Live discoveries said Checking until the active
+and pending reads resolved, then changed to the proven Idle state without a premature
+Idle flash. The same exact candidate restarted against the disposable retained R24
+volume with the reviewed scope, No-Strike revision, history and evidence intact. The
+backend observer found an empty queue, released lease, one application process, healthy
+SQLite integrity, no foreign-key violations, exact hashes and sizes for all 12 canonical
+artifacts and 18 source observations, and no server, lock, restart or resource-pressure
+error. This candidate is development-ready and cleared for independent review. It has
+not been deployed to either Range, promoted to `main`, or qualified as mission-ready.
+Live Arkime, positive VLAN evidence and updater apply/restore remain separate integration
+and deployment gates; they are not represented as passed by this stability run.
+
 Novice/browser stabilization corrections in progress (2026-11-06): the isolated
 R18 journey verified direct page activation, profile creation/deletion, ordered
 multi-network schedules, scheduled restart handoff, fallback approve and decline,
