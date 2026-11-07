@@ -2,9 +2,9 @@
 
 This is a **fresh-install-only** release. Use steps 1–4 below on a Linux Docker
 host where the NCT container, NCT storage and NCT recovery service/state are absent.
-It does not upgrade an older NCT installation, retain an older NCT account or carry
-older NCT evidence forward. It refuses an occupied target instead of deleting,
-adopting or changing it.
+It does not upgrade an older NCT installation or carry older NCT accounts, settings
+or evidence forward. It refuses an occupied target instead of deleting, adopting or
+changing it.
 
 You do not need to open or choose files from the `scripts` folder yourself. Use only
 the commands shown in this guide. The same sealed package may be installed separately
@@ -144,11 +144,13 @@ upgrade, reset or evidence-preservation route. If an NCT installation is present
 stop and preserve it for a separately qualified procedure; do not remove it merely
 to make the fresh check pass.
 
-`VALIDATION.json` records the exact local fresh-install rehearsal used to seal this
-package. A real host's service boot, browser trust and authorized network collection
-still need acceptance on each Range. The package includes a separate recovery-console
-image so recovery remains available when the application is unavailable. No
-credentials, analyst evidence or local preview data are bundled.
+After sealing, the package includes `VALIDATION.json`, which records the exact local
+fresh-install rehearsal used to qualify that sealed package. It is intentionally absent
+from an unsealed staging folder. A real host's service boot, browser trust and
+authorized network collection still need acceptance on each Range. The package
+includes a separate recovery-console image so recovery remains available when the
+application is unavailable. No credentials, analyst evidence or local preview data are
+bundled.
 
 ## Protected evidence retirement
 

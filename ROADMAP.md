@@ -61,6 +61,14 @@ staging also omits the existing-install updater guide. Rebuild and repeat the ex
 package, novice and reviewer gates before sealing; the halted staging folder is not a
 release artifact.
 
+The corrected R26 staging novice review found two final wording defects before sealing
+(2026-11-06): the guide named the seal-time `VALIDATION.json` while reviewing an
+unsealed folder, and its no-migration statement named accounts and evidence without
+explicitly naming settings. The guide now says that validation appears only after
+sealing and states that older accounts, settings and evidence do not carry forward.
+Restage the committed source and repeat fresh-install acceptance and the novice gate;
+neither earlier staging folder is a release artifact.
+
 Complete novice workflow requalification in progress (2026-11-06): exercise every
 visible NCT workspace, guide and supported mutation against an exact isolated Linux
 candidate, including scheduled scans, duplicate evidence, malformed imports,
