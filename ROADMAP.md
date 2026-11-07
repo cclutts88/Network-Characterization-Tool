@@ -51,6 +51,16 @@ time so it deterministically proves exact duplicate reuse rather than scheduler 
 Rebuild both exact R26 images from the corrected commit and repeat the complete Linux
 gate; do not reuse or package the superseded pre-correction images.
 
+The first staged R26 novice review halted sealing on an instruction contradiction
+(2026-11-06): the release record correctly advertised a fresh-only empty-host package,
+but its opening guide still offered a retained-data upgrade and named update files and
+source identities that were absent by design. The fresh guide now presents one clean
+installation path, states that two controllers receive separate accounts and evidence,
+and tells operators that occupied targets are refused rather than changed. Fresh-only
+staging also omits the existing-install updater guide. Rebuild and repeat the exact
+package, novice and reviewer gates before sealing; the halted staging folder is not a
+release artifact.
+
 Complete novice workflow requalification in progress (2026-11-06): exercise every
 visible NCT workspace, guide and supported mutation against an exact isolated Linux
 candidate, including scheduled scans, duplicate evidence, malformed imports,

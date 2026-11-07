@@ -190,9 +190,19 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
         release["supported_sources"] = []
         release["schema_gate"] = "fresh-only-empty-host"
         release["fresh_only"] = True
+        # Do not ship an existing-install upgrade guide in a package that explicitly
+        # advertises no supported upgrade source. The recovery implementation remains
+        # available for the installed fresh instance, but the operator receives one
+        # unambiguous installation path.
+        updater_guide = output / "docs/RANGE_UPDATER_PACKAGE.md"
+        updater_guide.unlink(missing_ok=True)
+        release["source_bindings"] = [
+            binding for binding in bindings
+            if binding["package"] != "docs/RANGE_UPDATER_PACKAGE.md"
+        ]
         registry = output / "scripts/nct-package-sources.json"
         registry.write_text("[]\n", encoding="utf-8")
-        for binding in bindings:
+        for binding in release["source_bindings"]:
             if binding["package"] == "scripts/nct-package-sources.json":
                 binding["sha256"] = digest(registry)
     else:

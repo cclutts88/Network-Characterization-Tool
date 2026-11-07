@@ -65,6 +65,16 @@ def test_release_declares_completed_retirement_contract():
     assert "it does not erase the" in guide
 
 
+def test_fresh_install_guide_describes_only_the_fresh_route():
+    guide = (Path(__file__).parents[1] / "docs" / "RANGE_FRESH_INSTALL.md").read_text()
+    assert "fresh-install-only" in guide
+    assert "fresh_only: true" in guide
+    assert "`supported_sources` list" in guide
+    assert "Existing Fresh-r2" not in guide
+    assert "nct-update-*.tar.gz" not in guide
+    assert "keeps the existing NCT account" not in guide
+
+
 def test_gui_update_accepts_every_supported_full_package_source():
     supported = json.loads((SCRIPTS / "nct-package-sources.json").read_text())
 

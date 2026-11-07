@@ -1,27 +1,15 @@
-# Start here — choose the NCT Range installation path
+# Start here — install NCT on a clean Range controller
 
-This full ZIP supports two different operations. Choose one before running any
-command, and run only the commands listed for that path. You do not need to open
-or choose files from the `scripts` folder yourself.
+This is a **fresh-install-only** release. Use steps 1–4 below on a Linux Docker
+host where the NCT container, NCT storage and NCT recovery service/state are absent.
+It does not upgrade an older NCT installation, retain an older NCT account or carry
+older NCT evidence forward. It refuses an occupied target instead of deleting,
+adopting or changing it.
 
-## Choose one path
-
-### A. New host with empty NCT storage
-
-Use **steps 1–4 below** to install NCT and its independent Updates & Recovery
-console on a new Linux Docker host with empty NCT storage. No older NCT
-installation is required.
-
-### B. Existing Fresh-r2 application with the exact Fresh-r3 helper and console
-
-Do **not** run the fresh-install commands below. Go directly to
-`docs/RANGE_UPDATER_PACKAGE.md`, section **Existing Fresh-r2 application with
-Fresh-r3 helper and console**.
-That route first updates the host helper and independent console, then tells you
-to upload the included `nct-update-*.tar.gz` through Updates & Recovery. It keeps
-the existing NCT account and retained evidence. The package refuses any different
-or ambiguous source instead of guessing. In particular, an untouched Fresh-r2
-helper/console stack is not this route and is refused before changes begin.
+You do not need to open or choose files from the `scripts` folder yourself. Use only
+the commands shown in this guide. The same sealed package may be installed separately
+on a second clean Range controller; each installation creates its own account,
+storage, evidence and recovery state.
 
 This is the standalone Docker route; it does not set up Kubernetes or claim a
 separately tested Docker Compose deployment.
@@ -118,7 +106,7 @@ Before opening the browser, have the administrator allow only approved analyst
 addresses to reach HTTPS ports 8445 and 8446 using the Range's firewall policy.
 This package does not make a broad firewall change. Have that administrator
 install the generated root CA on the workstation according to local policy; its
-   controller path is `/var/lib/nct/tls-material/certs/nct-lab-root.crt`. Check the
+controller path is `/var/lib/nct/tls-material/certs/nct-lab-root.crt`. Check the
 host address and certificate rather than silently bypassing a browser warning.
 
 1. Open `https://NCT_HOST_IP:8445` on the analyst workstation.
@@ -148,30 +136,19 @@ not make a broad firewall change. Data persists under `/var/lib/nct/data`; the
 host recovery helper lives under `/opt/nct-recovery` and its service is
 `nct-recovery-host.service`. The web containers do not receive Docker control.
 
-## Existing installations and qualification limits
+## Qualification limits
 
-For an existing NCT installation, do not use fresh setup as an upgrade or reset.
-Open `release.json` and find the exact installed build and commit in
-`supported_sources`, then use the full ZIP's checked recovery-console-first route in
-`docs/RANGE_UPDATER_PACKAGE.md`. That route preserves the source application while
-installing the independent recovery path, then applies the included GUI update from
-the browser. This package explicitly qualifies the mixed
-controller state named in `helper_upgrade_source`: the Fresh-r2 application with
-the exact Fresh-r3 helper and console. An untouched Fresh-r2 helper/console stack,
-an unlisted build, or any other state must be preserved and reviewed rather than
-guessed or forced through the updater.
+`release.json` identifies this package with `fresh_only: true`, an empty
+`supported_sources` list and the `fresh-only-empty-host` gate. Do not use it as an
+upgrade, reset or evidence-preservation route. If an NCT installation is present,
+stop and preserve it for a separately qualified procedure; do not remove it merely
+to make the fresh check pass.
 
-The smaller `nct-update-*.tar.gz` file inside the ZIP is the separately qualified
-application-only route for its own declared source. Use the full ZIP when replacing
-both the independent recovery components and the NCT application: update the host
-helper and console first, then upload that included application update in the browser.
-That is the current mixed-stack-to-this-release Range route.
-
-`VALIDATION.json` records the exact local fresh-install and update rehearsals.
-A real host's service boot, browser trust and authorized network collection still
-need acceptance on that Range. The package includes a separate recovery-console
-image; the console remains available independently when an application update
-fails. No credentials, analyst evidence or local preview data are bundled.
+`VALIDATION.json` records the exact local fresh-install rehearsal used to seal this
+package. A real host's service boot, browser trust and authorized network collection
+still need acceptance on each Range. The package includes a separate recovery-console
+image so recovery remains available when the application is unavailable. No
+credentials, analyst evidence or local preview data are bundled.
 
 ## Protected evidence retirement
 
