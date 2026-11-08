@@ -354,6 +354,62 @@ added capability itself works. Correct the regression and repeat the affected ga
 not defer it merely to keep feature momentum. Packaging, Range acceptance, promotion
 to `main` and mission-readiness claims remain separate later gates.
 
+## Architecture reuse and integration gate
+
+Before implementing a new capability, trace how its inputs, retained evidence,
+identity, scope, processing, derived results, caches, operator guidance and downstream
+views already move through NCT. Record which existing contracts and components will be
+reused and which current consumers can benefit from the new result.
+
+Prefer extending the established shared path over creating another direct connection:
+
+- Reuse canonical artifacts, observations, Network Scope context, processing jobs,
+  evidence receipts, derived-result versions, dependency/dirty tracking and lifecycle
+  controls where they already cover the requirement.
+- Reuse shared UI loading, filtering, paging, export, theme, tutorial and Operator Guide
+  contracts rather than adding a page-specific substitute.
+- Feed one defensible retained result to every applicable Analyze, Hunt, Reach, Map,
+  Mission Environment, history, export and health consumer instead of recalculating or
+  reconnecting separately for each view.
+- Inspect upstream producers and downstream readers before changing a schema, API,
+  worker, queue, cache or evidence record. Test the affected shared journey, not only the
+  new entry point.
+- Do not add a parallel database, registry, worker, cache, polling loop, source importer
+  or evidence-to-view adapter merely because it is quicker locally. A genuinely new
+  boundary requires a documented reason, compatibility/retirement plan and Independent
+  Reviewer clearance.
+- Remove or deliberately bridge superseded paths so two implementations do not silently
+  diverge. Preserve historical evidence and existing supported callers during any
+  transition.
+
+The roadmap entry and reviewer packet for a meaningful feature must say what was reused,
+what new boundary was unavoidable, how duplicate processing was avoided and which
+existing views now consume the result. A feature is incomplete when it works through a
+new isolated path but bypasses the established evidence and lifecycle model.
+
+## Exercise Range change control
+
+Once an exercise begins, freeze each participating Range on its accepted build. Do not
+deploy new features, feature packages, schema expansions, migrations, visual redesigns
+or opportunistic refactors into that environment during the exercise.
+
+Interaction with an exercise Range is limited to repairing or recovering functionality
+the accepted build was already expected to provide. An exercise repair must:
+
+- Be the smallest scoped correction that restores the existing capability.
+- Preserve evidence first and avoid unrelated cleanup or feature work.
+- Be reversible or have a tested recovery path, with the affected state recorded before
+  the change when practical.
+- Pass focused validation for the failure and a short regression of the affected
+  operator journey before use resumes.
+- Be documented as an exercise repair, including what changed, what was preserved and
+  what remains deferred.
+
+Continue new feature development and qualification only in isolated development or test
+environments while the exercise is active. Hold completed feature packages for a
+separate post-exercise acceptance window. Do not infer that an exercise has ended; wait
+for the user to state that it has ended or explicitly authorize a named exception.
+
 # Completion Language
 
 Clearly distinguish:

@@ -20,6 +20,28 @@ paths, novice browser review, backend observation and independent quality cleara
 An addition is not complete if any previously supported workflow becomes unreliable,
 confusing or unusable.
 
+Architecture reuse and exercise Range change-control rules adopted (2026-11-08): every
+new capability must first trace the existing NCT path from source evidence through
+identity, scope, retained storage, processing, derived results, lifecycle controls and
+all applicable operator views. Extend the canonical shared contracts where they fit;
+do not create a parallel importer, registry, worker, cache, poller, database or
+evidence-to-view connection merely to deliver one feature faster. Each meaningful
+feature review must identify what it reuses, why any new boundary is unavoidable, how
+duplicate processing is prevented and which existing Analyze, Hunt, Reach, Map, Mission
+Environment, history, export or health consumers receive the result. Superseded paths
+require an explicit bridge or retirement plan so they cannot silently diverge.
+
+Participating Range environments are frozen on their accepted build for the duration of
+an exercise. No new feature package, schema expansion, migration, redesign or bundled
+refactor is deployed during an exercise. Range interaction is limited to the smallest
+evidence-preserving repair or recovery needed to restore behavior that the accepted
+build already promised, with a tested recovery path, focused failure regression and a
+short affected-workflow check. New development continues only in isolated environments
+and waits for a separate post-exercise acceptance window. The project must not infer an
+exercise has ended; feature deployment resumes only after the user states that it has
+ended or explicitly authorizes a named exception. The durable operating contract is in
+`docs/NCT_PROJECT_OPERATING_RULES.md`.
+
 Emergency scan-admission fence correction completed in development (2026-11-07):
 backend review found a narrow race in which Emergency Stop & Clear blocked worker
 startup but did not reject new durable manual, multi-network or scheduled work admitted
